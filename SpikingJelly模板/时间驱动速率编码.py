@@ -13,6 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from torch.cuda import amp
 import os
+import draw
 
 parser = argparse.ArgumentParser(description='spikingjelly LIF MNIST Training')
 
@@ -29,7 +30,7 @@ parser.add_argument('-b', '--batch-size', default=64, type=int, help='Batch 大�
 parser.add_argument('-T', '--timesteps', default=100, type=int, dest='T', help='仿真时长，例如“100”\n')
 parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float, metavar='LR', help='学习率，例如“1e-3”\n', dest='lr')
 parser.add_argument('--tau', default=2.0, type=float, help='LIF神经元的时间常数tau，')
-parser.add_argument('-N', '--epoch', default=10, type=int, help='训练epoch\n')
+parser.add_argument('-N', '--epoch', default=1, type=int, help='训练epoch\n')
 
 parser.add_argument('--amp', action='store_true', help='是否启动混合精度训练')
 parser.add_argument('--cupy', action='store_true', help='是否使用cupy和多步传播')
@@ -62,6 +63,7 @@ def main():
     max_test_accuracy = 0
     train_batch_accs = []                   # 记录每个batch的训练准确率
     test_accs = []                          # 记录测试准确率
+    draw_spike_frequency_histogram_data = []        # 用来绘制神经元的脉冲发放频率柱状图
 
     # 用于混合精度训练
     scaler = None
@@ -75,7 +77,7 @@ def main():
     torch.backends.cudnn.benchmark = False  # 不为卷积等运算进行硬件层面上的优化
 
     train_dataset = torchvision.datasets.MNIST(root=dataset_dir, train=True, download=True, transform=transforms.ToTensor())
-    test_dataset = torchvision.datasets.MNIST(root=dataset_dir, train=False, download=True, transform=transforms.ToTensor())
+    test_dataset = torchvision.datasets.MNIST(root=dataset_dir, train=True, download=True, transform=transforms.ToTensor())
     train_loader = DataLoader(train_dataset, batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size, shuffle=True)
 
@@ -125,11 +127,12 @@ def main():
                     for step in range(num_steps):
                         if step == 0:
                             # print(encoder(img).shape)                     # [64, 1, 28, 28]
-                            train_data_out_spike_counter = net(encoder(img).float())  # 记录整个num_steps内输出层神经元的spike次数
+                            train_data_out_spike_counter_in_num_step = net(encoder(img).float())  # 记录整个num_steps内输出层神经元的spike次数
                             # print(result.shape)                           # result的格式为[batch_size, 类别数量]
                         else:
-                            train_data_out_spike_counter += net(encoder(img).float())  # 在w X h维度上相加
-                    out_spike_counter_frequency = train_data_out_spike_counter / num_steps  # 在num_steps内的脉冲发放频率
+                            spike_num = net(encoder(img).float())  # 在w X h维度上相加
+                            train_data_out_spike_counter_in_num_step += spike_num
+                    out_spike_counter_frequency = train_data_out_spike_counter_in_num_step / num_steps  # 在num_steps内的脉冲发放频率
                     loss = F.mse_loss(out_spike_counter_frequency, label_one_hot)  # 输出层神经元的脉冲发放频率与真实类别的MSE
                     optimizer.zero_grad()
                     scaler.scale(loss).backward()
@@ -139,11 +142,12 @@ def main():
                 for step in range(num_steps):
                     if step == 0:
                         # print(encoder(img).shape)                     # [64, 1, 28, 28]
-                        train_data_out_spike_counter = net(encoder(img).float())              # 记录整个num_steps内输出层神经元的spike次数
+                        train_data_out_spike_counter_in_num_step = net(encoder(img).float())              # 记录整个num_steps内输出层神经元的spike次数
                         # print(result.shape)                           # result的格式为[batch_size, 类别数量]
                     else:
-                        train_data_out_spike_counter += net(encoder(img).float())             # 在w X h维度上相加
-                out_spike_counter_frequency = train_data_out_spike_counter / num_steps             # 在num_steps内的脉冲发放频率
+                        spike_num = net(encoder(img).float())  # 在w X h维度上相加
+                        train_data_out_spike_counter_in_num_step += spike_num
+                out_spike_counter_frequency = train_data_out_spike_counter_in_num_step / num_steps             # 在num_steps内的脉冲发放频率
                 loss = F.mse_loss(out_spike_counter_frequency, label_one_hot)           # 输出层神经元的脉冲发放频率与真实类别的MSE
                 optimizer.zero_grad()
                 loss.backward()
@@ -177,6 +181,7 @@ def main():
                         test_data_out_spike_counter = net(encoder(img).float())             # 记录输出层的spike
                     else:
                         test_data_out_spike_counter = net(encoder(img).float())
+
                 test_data_correct_sum += (test_data_out_spike_counter.max(1)[1] == label.to(device)).float().sum().item()       # 累加正确数量
                 test_data_sum += label.numel()      # 累加总数据量
                 functional.reset_net(net)
@@ -225,14 +230,17 @@ def main():
         m.s_seq.append(y.unsqueeze(0))              # 存储最后一层的脉冲（0/1）
     output_layer.register_forward_hook(save_hook)   # 注册钩子
 
-    with torch.no_grad():
+    with torch.no_grad():                       # 使用一张图片输入网络来测试结果
         img, label = test_dataset[0]
         img = img.to(device)
+        draw_hot_list = []                      # 用来存储神经元在不同时刻的电压以用来绘制热力图
         for step in range(num_steps):           # 使用测试集中的一张图片测试放电率，由于钩子的存在，每个时间步都会记录电压和脉冲
             if step == 0:
                 out_spike_counter = net(encoder(img).float())       # 格式为[1, 1]
             else:
                 out_spike_counter += net(encoder(img).float())
+            draw_hot_list.append(net[2].v)             # 记录每一个神经元(各个通道中)在每个时刻的电压
+        draw.draw_hot_pic(draw_hot_list, num_steps)                 # 绘制并保存热力图
         out_spike_counter_frequency = (out_spike_counter / num_steps).cpu().numpy()
         print(f'Firing rate: {out_spike_counter_frequency}')                    # 输出每个神经元的放电率（10个）
 
