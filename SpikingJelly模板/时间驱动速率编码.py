@@ -18,10 +18,10 @@ import draw
 parser = argparse.ArgumentParser(description='spikingjelly LIF MNIST Training')
 
 parser.add_argument('--device', default='cuda:0', help='运行的设备\n')
-parser.add_argument('--dataset-dir', default='.\\', help='保存MNIST数据集的位置，\n')
-parser.add_argument('--log-dir', default='.\\runs', help='保存tensorboard日志文件的位置.')
-parser.add_argument('--resume-dir', type=str, default='.\\resume', help='输出断点续训等文件的位置\n')
-parser.add_argument('--model-output-dir', default='.\\result_model', help='模型保存路径，例如“./”\n')
+parser.add_argument('--dataset-dir', default='./', help='保存MNIST数据集的位置，\n')
+parser.add_argument('--log-dir', default='./runs', help='保存tensorboard日志文件的位置.')
+parser.add_argument('--resume-dir', type=str, default='./resume', help='输出断点续训等文件的位置\n')
+parser.add_argument('--model-output-dir', default='./result_model', help='模型保存路径，例如“./”\n')
 parser.add_argument('--num-workers', default=4, type=int, help='加载数据集使用的核心数量\n')
 parser.add_argument('--lr-scheduler', default='CosALR', type=str, help='选择学习率衰减算法 StepLR or CosALR')
 parser.add_argument('-T_max', default=32, type=int, help='使用余弦退火算法优化学习率时的最大优化次数(优化前多少个epochs)')
@@ -30,7 +30,7 @@ parser.add_argument('-b', '--batch-size', default=64, type=int, help='Batch 大�
 parser.add_argument('-T', '--timesteps', default=100, type=int, dest='T', help='仿真时长，例如“100”\n')
 parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float, metavar='LR', help='学习率，例如“1e-3”\n', dest='lr')
 parser.add_argument('--tau', default=2.0, type=float, help='LIF神经元的时间常数tau，')
-parser.add_argument('-N', '--epoch', default=1, type=int, help='训练epoch\n')
+parser.add_argument('-N', '--epoch', default=10, type=int, help='训练epoch\n')
 
 parser.add_argument('--amp', action='store_true', help='是否启动混合精度训练')
 parser.add_argument('--cupy', action='store_true', help='是否使用cupy和多步传播')
@@ -78,8 +78,13 @@ def main():
 
     train_dataset = torchvision.datasets.MNIST(root=dataset_dir, train=True, download=True, transform=transforms.ToTensor())
     test_dataset = torchvision.datasets.MNIST(root=dataset_dir, train=True, download=True, transform=transforms.ToTensor())
-    train_loader = DataLoader(train_dataset, batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size, shuffle=True)
+
+    # 取少部分数据集用来调试程序
+    train_dataset, _ = data.random_split(train_dataset, [100, len(train_dataset)-100])
+    test_dataset, _ = data.random_split(test_dataset, [40, len(test_dataset)-40])
+
+    train_loader = DataLoader(train_dataset, batch_size, shuffle=True, num_workers=args.num_workers)
+    test_loader = DataLoader(test_dataset, batch_size, shuffle=True, num_workers=args.num_workers)
 
     net = nn.Sequential(
         nn.Flatten(),
